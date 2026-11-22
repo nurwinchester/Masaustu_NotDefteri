@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -46,7 +46,18 @@ namespace NotDefteri
             };
             var dock = new DockPanel();
 
-            header = new Border { Height = 34 };
+            header = new Border { Height = 34, Cursor = Cursors.SizeAll, ToolTip = "Sürükle: başka kenara ya da monitöre taşı" };
+            header.MouseLeftButtonDown += (s, e) =>
+            {
+                if (e.ClickCount > 1 || e.OriginalSource is Button) return;
+                try { DragMove(); } catch (InvalidOperationException) { }
+                Native.POINT pt;
+                int px, py;
+                if (Native.GetCursorPos(out pt)) { px = pt.X; py = pt.Y; }
+                else { double k = app.Scale; px = (int)((Left + ActualWidth / 2) * k); py = (int)((Top + 20) * k); }
+                app.SnapToPoint(px, py, Top + S, true);
+                e.Handled = true;
+            };
             var hd = new DockPanel();
             var close = HeaderButton("×", "Kapat (Esc)", 16);
             close.Click += (s, e) => app.ClosePanel();
@@ -161,6 +172,12 @@ namespace NotDefteri
             header.Background = Theme.B(Divider.TabColor);
             card.Background = Theme.B(Divider.PageColor);
             title.Text = Theme.Upper(Divider.Name);
+        }
+
+        public void ApplySideAndPlace(StripWindow strip)
+        {
+            ApplySide(app.IsRightSide);
+            PlaceNear(strip);
         }
 
         public void PlaceNear(StripWindow strip)

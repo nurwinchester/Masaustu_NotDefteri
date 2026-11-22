@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Runtime.InteropServices;
 
 namespace NotDefteri
@@ -24,6 +24,12 @@ namespace NotDefteri
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetShellWindow();
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT { public int X; public int Y; }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT pt);
 
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
         static extern IntPtr GetWindowLongPtr64(IntPtr h, int i);

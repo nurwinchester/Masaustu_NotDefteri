@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -82,6 +82,8 @@ namespace NotDefteri
             bool right = app.IsRightSide;
             stack.Children.Add(MakeHandle(right));
             stack.Children.Add(MakePin(right));
+            if (System.Windows.Forms.Screen.AllScreens.Length > 1)
+                stack.Children.Add(MakeScreenSwitch(right));
             var list = Store.Data.Dividers.Where(d => d.OnDesktop).OrderBy(d => d.Order).ToList();
             foreach (var d in list) stack.Children.Add(MakeTab(d, right));
             if (list.Count < Store.MaxOnDesktop) stack.Children.Add(MakePlus(right));
@@ -116,13 +118,46 @@ namespace NotDefteri
             h.MouseLeftButtonDown += (s, e) =>
             {
                 if (e.ClickCount > 1) return;
-                app.ClosePanel();
+                app.HidePanelForDrag();
                 try { DragMove(); } catch (InvalidOperationException) { }
                 Snap();
                 e.Handled = true;
             };
             h.ContextMenu = app.MakeHandleMenu();
             return h;
+        }
+
+        /// <summary>Çoklu monitörde şeridi tek tıkla diğer ekrana taşır.</summary>
+        FrameworkElement MakeScreenSwitch(bool right)
+        {
+            string nextLabel = app.NextScreenLabel();
+            var b = new Border
+            {
+                Width = 30,
+                Height = 30,
+                CornerRadius = new CornerRadius(15),
+                Background = Theme.B("#CCFFF8F2"),
+                BorderBrush = Theme.B(Theme.Gold),
+                BorderThickness = new Thickness(1.2),
+                HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+                Margin = right ? new Thickness(0, 0, 7, 8) : new Thickness(7, 0, 0, 8),
+                Cursor = Cursors.Hand,
+                ToolTip = "Diğer ekrana taşı (" + nextLabel + ")",
+                Effect = Theme.Shadow(6, 1, 0.18, 270),
+                Child = new TextBlock
+                {
+                    Text = "\uE7F4",
+                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontSize = 13.5,
+                    Foreground = Theme.B(Theme.Gold),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            b.MouseEnter += (s, e) => b.Background = Theme.B("#FFF3E4");
+            b.MouseLeave += (s, e) => b.Background = Theme.B("#CCFFF8F2");
+            b.MouseLeftButtonUp += (s, e) => { e.Handled = true; app.MoveToNextScreen(); };
+            return b;
         }
 
         /// <summary>"Hep üstte" anahtarı: basınca ayraçlar diğer uygulamaların üstünde kalır.</summary>
@@ -243,19 +278,20 @@ namespace NotDefteri
         /// <summary>Sürükleyip bırakınca: bırakılan monitörün en yakın kenarına yapışır, yüksekliği korur.</summary>
         void Snap()
         {
-            double k = app.Scale;
-            double cx = (Left + ActualWidth / 2) * k;
-            double cy = (Top + ActualHeight / 2) * k;
-            var scr = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point((int)cx, (int)cy));
-            var wa = scr.WorkingArea;
-            double waL = wa.Left / k, waR = wa.Right / k, waT = wa.Top / k, waB = wa.Bottom / k;
-            app.Dock.Screen = scr.DeviceName;
-            app.Dock.Side = (cx / k) < (waL + waR) / 2 ? "Left" : "Right";
-            double top = Math.Max(waT, Math.Min(Top, waB - ActualHeight));
-            app.Dock.Top = top - waT;
-            Rebuild();
-            Place();
-            Store.MarkDirty();
+            Native.POINT pt;
+            int px, py;
+            if (Native.GetCursorPos(out pt))
+            {
+                px = pt.X;
+                py = pt.Y;
+            }
+            else
+            {
+                double k = app.Scale;
+                px = (int)((Left + ActualWidth / 2) * k);
+                py = (int)((Top + ActualHeight / 2) * k);
+            }
+            app.SnapToPoint(px, py, Top, false);
         }
     }
 }

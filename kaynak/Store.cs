@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -41,10 +41,15 @@ namespace NotDefteri
 
     public class SettingsData
     {
-        public SettingsData() { AutoStart = true; }
+        public SettingsData() { AutoStart = true; AiProvider = "Gemini"; AiModel = "gemini-3.5-flash-lite"; }
         public bool AutoStart { get; set; }
         /// <summary>Açıkken ayraçlar ve açık sayfa diğer uygulamaların üstünde kalır.</summary>
         public bool AlwaysOnTop { get; set; }
+        /// <summary>İsteğe bağlı yapay zeka sağlayıcısı: Gemini, OpenAI veya Ollama.</summary>
+        public string AiProvider { get; set; }
+        public string AiApiKey { get; set; }
+        public string AiModel { get; set; }
+        public string AiEndpoint { get; set; }
     }
 
     public class AppData

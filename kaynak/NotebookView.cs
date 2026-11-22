@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -28,17 +28,26 @@ namespace NotDefteri
         readonly ScrollViewer tabsScroll;
         readonly Border tabBar;
         readonly Border toolBar;
+        readonly Border assistBar;
+        readonly TextBlock assistText;
+        readonly Button assistActionBtn;
+        readonly Button assistCloseBtn;
+        readonly Button assistBtn;
         readonly DispatcherTimer saveTimer;
         readonly HashSet<CheckBox> wired = new HashSet<CheckBox>();
         readonly Dictionary<PageData, Border> tabBorders = new Dictionary<PageData, Border>();
         readonly Dictionary<PageData, TextBlock> tabTexts = new Dictionary<PageData, TextBlock>();
         readonly Dictionary<PageData, Button> tabCloses = new Dictionary<PageData, Button>();
+        string undoXaml;
+        int aiSeq;
+        bool aiBusy;
 
         public DividerData Divider { get { return div; } }
         public CornerRadius TabBarCorner { set { tabBar.CornerRadius = value; } }
 
         public NotebookView()
         {
+            RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -74,9 +83,60 @@ namespace NotDefteri
             tools.Children.Add(Tool("•", "Madde işaretli liste (Ctrl+Shift+L) — ya da satır başında '- ' yaz", () => EditingCommands.ToggleBullets.Execute(null, rtb), t => t.FontSize = 16));
             tools.Children.Add(Tool("1.", "Numaralı liste (Ctrl+Shift+N) — ya da satır başında '1. ' yaz", () => EditingCommands.ToggleNumbering.Execute(null, rtb), null));
             tools.Children.Add(Tool("☐", "To-do kutusu (Ctrl+Shift+K) — ya da satır başında '[] ' yaz\nİşaretlemek için: kutuya tıkla ya da Ctrl+Enter", ToggleTodoSelection, t => t.FontSize = 15));
+            tools.Children.Add(Sep());
+            assistBtn = MakeAssistButton();
+            tools.Children.Add(assistBtn);
             toolBar = new Border { Child = tools, BorderThickness = new Thickness(0, 0, 0, 1) };
             Grid.SetRow(toolBar, 1);
             Children.Add(toolBar);
+
+            // --- Düzenleyici durum / geri al şeridi ---
+            var assistRow = new DockPanel { Margin = new Thickness(10, 4, 8, 4) };
+            assistCloseBtn = new Button
+            {
+                Content = "×",
+                Style = Theme.FlatButton,
+                FontSize = 13,
+                Padding = new Thickness(6, 0, 6, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Kapat"
+            };
+            assistCloseBtn.Click += (s, e) => { CancelAi(); HideAssistBar(); };
+            DockPanel.SetDock(assistCloseBtn, Dock.Right);
+
+            assistActionBtn = new Button
+            {
+                Content = "↩ Geri Al",
+                Style = Theme.FlatButton,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Padding = new Thickness(8, 2, 8, 2),
+                Margin = new Thickness(6, 0, 2, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            assistActionBtn.Click += (s, e) => { var act = assistActionBtn.Tag as Action; if (act != null) act(); };
+            DockPanel.SetDock(assistActionBtn, Dock.Right);
+
+            assistText = new TextBlock
+            {
+                FontSize = 12,
+                Foreground = Theme.B(Theme.Ink),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            assistRow.Children.Add(assistCloseBtn);
+            assistRow.Children.Add(assistActionBtn);
+            assistRow.Children.Add(assistText);
+            assistBar = new Border
+            {
+                Child = assistRow,
+                Background = Theme.B("#FFF4D9"),
+                BorderBrush = Theme.B("#E4C98E"),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Visibility = Visibility.Collapsed
+            };
+            Grid.SetRow(assistBar, 2);
+            Children.Add(assistBar);
 
             // --- Yazı alanı ---
             rtb = new RichTextBox
@@ -102,7 +162,7 @@ namespace NotDefteri
             rtb.PreviewKeyDown += OnKey;
             rtb.PreviewTextInput += OnTextInput;
             DataObject.AddPastingHandler(rtb, OnPaste);
-            Grid.SetRow(rtb, 2);
+            Grid.SetRow(rtb, 3);
             Children.Add(rtb);
 
             saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
@@ -114,6 +174,7 @@ namespace NotDefteri
 
         public void Detach()
         {
+            CancelAi();
             SaveNow();
             Store.PageChanged -= OnExternalPage;
             Store.StructureChanged -= OnStructure;
@@ -158,6 +219,9 @@ namespace NotDefteri
         void ShowPage(PageData p)
         {
             SaveNow();
+            CancelAi();
+            undoXaml = null;
+            HideAssistBar();
             page = p;
             if (div != null && p != null) div.ActivePageId = p.Id;
             LoadDoc();
@@ -481,6 +545,329 @@ namespace NotDefteri
             return new Border { Width = 1, Margin = new Thickness(5, 5, 5, 5), Background = Theme.B("#26000000") };
         }
 
+        // ------------------------------------------------------------------ akıllı / yapay zeka düzenleyici
+
+        Button MakeAssistButton()
+        {
+            var sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            sp.Children.Add(new TextBlock
+            {
+                Text = "✦",
+                FontSize = 13,
+                Foreground = Theme.B(Theme.Gold),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
+            });
+            sp.Children.Add(new TextBlock
+            {
+                Text = "Düzenle ▾",
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Theme.B(Theme.Ink),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var b = new Button
+            {
+                Content = sp,
+                ToolTip = "Yazıyı akıllıca düzenle (Ctrl+Shift+D)\nÇevrimdışı otomatik düzenleme ve isteğe bağlı Yapay Zeka seçenekleri",
+                Style = Theme.FlatButton,
+                Background = Theme.B("#22C99B3B"),
+                Padding = new Thickness(8, 2, 8, 3),
+                Margin = new Thickness(1, 0, 0, 0)
+            };
+            b.Click += (s, e) => OpenAssistMenu();
+            return b;
+        }
+
+        void OpenAssistMenu()
+        {
+            var m = new ContextMenu();
+            bool hasSel = !rtb.Selection.IsEmpty;
+            string scopeHint = hasSel ? " (seçili metin)" : "";
+
+            AddAssistItem(m, "✦ Akıllı Düzenle" + scopeHint, "Ctrl+Shift+D", () => ApplyOfflineTransform(TextAssistant.SmartFormat, "✦ Metin akıllıca düzenlendi."));
+            AddAssistItem(m, "Aa Yazım ve Boşlukları Düzelt" + scopeHint, null, () => ApplyOfflineTransform(TextAssistant.FixSpellingAndSpacing, "✦ Yazım ve boşluklar düzeltildi."));
+            AddAssistItem(m, "• Maddelere Ayır" + scopeHint, null, () => ApplyOfflineTransform(TextAssistant.ConvertToBullets, "✦ Maddelere ayrıldı."));
+            AddAssistItem(m, "☐ Yapılacaklara Çevir" + scopeHint, null, () => ApplyOfflineTransform(TextAssistant.ConvertToTodos, "✦ Yapılacaklar listesine çevrildi."));
+            AddAssistItem(m, "↕ Tamamlananları Alta Al", null, () => ApplyOfflineTransform(TextAssistant.SortCompletedTodosBottom, "✦ Tamamlanan maddeler alta alındı.", true));
+            AddAssistItem(m, "Biçimi Sadeleştir" + scopeHint, null, () => ApplyOfflineTransform(TextAssistant.SimplifyPlain, "✦ Biçim sadeleştirildi."));
+
+            m.Items.Add(new Separator());
+
+            bool aiReady = TextAssistant.IsAiConfigured();
+            string provName = string.IsNullOrWhiteSpace(Store.Data.Settings.AiProvider) ? "Gemini" : Store.Data.Settings.AiProvider;
+            string aiTag = aiReady ? provName : "Ayarla";
+
+            AddAssistItem(m, "★ Yapay Zeka: Düzenle ve Toparla" + scopeHint, aiTag, () => StartAiAction(AiAction.Polish));
+            AddAssistItem(m, "★ Yapay Zeka: Özetle" + scopeHint, null, () => StartAiAction(AiAction.Summarize));
+            AddAssistItem(m, "★ Yapay Zeka: Görev Listesi Çıkar" + scopeHint, null, () => StartAiAction(AiAction.ExtractTodos));
+            AddAssistItem(m, "★ Yapay Zeka: Daha Akıcı / Profesyonel Yap" + scopeHint, null, () => StartAiAction(AiAction.Professional));
+            AddAssistItem(m, "★ Yapay Zeka: Özel İstek…" + scopeHint, null, () => StartAiAction(AiAction.Custom));
+            AddAssistItem(m, "⚙ Yapay Zeka Ayarları…", null, () => Dialogs.ShowAiSettings());
+
+            if (!string.IsNullOrEmpty(undoXaml))
+            {
+                m.Items.Add(new Separator());
+                AddAssistItem(m, "↩ Son Düzenlemeyi Geri Al", null, UndoLastAssist);
+            }
+
+            m.PlacementTarget = assistBtn;
+            m.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            m.IsOpen = true;
+        }
+
+        static void AddAssistItem(ContextMenu menu, string title, string shortcut, Action act)
+        {
+            var mi = new MenuItem { Header = title };
+            if (!string.IsNullOrEmpty(shortcut)) mi.InputGestureText = shortcut;
+            mi.Click += (s, e) => act();
+            menu.Items.Add(mi);
+        }
+
+        string CaptureDocXaml()
+        {
+            try { return XamlWriter.Save(rtb.Document); }
+            catch { return null; }
+        }
+
+        string ExtractSourceText(bool forceFullDoc, out bool isSelection)
+        {
+            if (!forceFullDoc && !rtb.Selection.IsEmpty)
+            {
+                string sel = rtb.Selection.Text;
+                if (!string.IsNullOrWhiteSpace(sel))
+                {
+                    isSelection = true;
+                    return sel;
+                }
+            }
+            isSelection = false;
+            return TextAssistant.DocumentToMarkdown(rtb.Document);
+        }
+
+        void ApplyOfflineTransform(Func<string, string> transform, string statusMsg, bool forceFullDoc = false)
+        {
+            if (aiBusy) return;
+            bool isSel;
+            string source = ExtractSourceText(forceFullDoc, out isSel);
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                ShowAssistBar("Düzenlenecek bir yazı bulunamadı.", null, null, false);
+                return;
+            }
+            string output = transform(source);
+            if (string.IsNullOrWhiteSpace(output)) return;
+            ApplyTransformedMarkdown(output, isSel, statusMsg);
+        }
+
+        void StartAiAction(AiAction action)
+        {
+            if (aiBusy) return;
+            bool isSel;
+            string source = ExtractSourceText(false, out isSel);
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                ShowAssistBar("Düzenlenecek bir yazı bulunamadı.", null, null, false);
+                return;
+            }
+            if (!TextAssistant.IsAiConfigured())
+            {
+                if (!Dialogs.ShowAiSettings() || !TextAssistant.IsAiConfigured()) return;
+            }
+            string custom = null;
+            if (action == AiAction.Custom)
+            {
+                custom = Dialogs.Ask("Yapay Zeka — Özel İstek", "Yazıya ne yapılmasını istersin? (ör. İngilizceye çevir, daha kısa yaz, toplantı notuna çevir):", "");
+                if (string.IsNullOrWhiteSpace(custom)) return;
+            }
+
+            int seq = ++aiSeq;
+            aiBusy = true;
+            assistBtn.IsEnabled = false;
+            PageData targetPage = page;
+            ShowAssistBar("✦ Yapay zeka yazını düzenliyor…", "İptal", () => { CancelAi(); HideAssistBar(); }, false);
+
+            TextAssistant.RunAiAsync(source, action, custom, (result, err) =>
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (seq != aiSeq) return;
+                    aiBusy = false;
+                    assistBtn.IsEnabled = true;
+                    if (targetPage != page) { HideAssistBar(); return; }
+                    if (!string.IsNullOrEmpty(err))
+                    {
+                        ShowAssistBar("Yapay zeka hatası: " + err, "Ayarlar", () => Dialogs.ShowAiSettings(), true);
+                        return;
+                    }
+                    if (string.IsNullOrWhiteSpace(result))
+                    {
+                        ShowAssistBar("Yapay zeka boş yanıt döndürdü.", null, null, true);
+                        return;
+                    }
+                    ApplyTransformedMarkdown(result, isSel, "✦ Yapay zeka ile düzenlendi.");
+                }));
+            });
+        }
+
+        void CancelAi()
+        {
+            aiSeq++;
+            if (aiBusy)
+            {
+                aiBusy = false;
+                if (assistBtn != null) assistBtn.IsEnabled = true;
+            }
+        }
+
+        void ApplyTransformedMarkdown(string markdown, bool replaceSelection, string statusMsg)
+        {
+            string snap = CaptureDocXaml();
+            if (!string.IsNullOrEmpty(snap)) undoXaml = snap;
+
+            loading = true;
+            try
+            {
+                if (replaceSelection && !rtb.Selection.IsEmpty)
+                {
+                    bool singlePlain = !markdown.Contains("\n") &&
+                                       !markdown.StartsWith("#") &&
+                                       !markdown.StartsWith("- ") &&
+                                       !markdown.StartsWith("1. ") &&
+                                       !markdown.Contains("**") &&
+                                       !markdown.Contains("*") &&
+                                       !markdown.Contains("~~") &&
+                                       !markdown.Contains("`");
+                    if (singlePlain)
+                    {
+                        rtb.Selection.Text = markdown;
+                    }
+                    else
+                    {
+                        ReplaceSelectedBlocks(markdown);
+                    }
+                }
+                else
+                {
+                    var blocks = TextAssistant.MarkdownToBlocks(markdown);
+                    var doc = new FlowDocument { PagePadding = new Thickness(2, 0, 2, 0) };
+                    foreach (var b in blocks) doc.Blocks.Add(b);
+                    wired.Clear();
+                    rtb.Document = doc;
+                    rtb.CaretPosition = doc.ContentStart.GetInsertionPosition(LogicalDirection.Forward) ?? doc.ContentStart;
+                }
+                WireTodos();
+            }
+            finally
+            {
+                loading = false;
+            }
+            ScheduleSave();
+            FocusEditor();
+            ShowAssistBar(statusMsg, "↩ Geri Al", UndoLastAssist, false);
+        }
+
+        void ReplaceSelectedBlocks(string markdown)
+        {
+            var newBlocks = TextAssistant.MarkdownToBlocks(markdown);
+            var startP = rtb.Selection.Start.Paragraph;
+            var endP = rtb.Selection.End.Paragraph;
+            Block startTop = TopLevelBlock(startP);
+            Block endTop = TopLevelBlock(endP);
+
+            if (startTop == null || endTop == null || startTop.Parent != rtb.Document || endTop.Parent != rtb.Document)
+            {
+                rtb.Selection.Text = markdown;
+                return;
+            }
+
+            var toRemove = new List<Block>();
+            bool inRange = false;
+            foreach (Block b in rtb.Document.Blocks)
+            {
+                if (b == startTop) inRange = true;
+                if (inRange) toRemove.Add(b);
+                if (b == endTop) break;
+            }
+            if (toRemove.Count == 0)
+            {
+                rtb.Selection.Text = markdown;
+                return;
+            }
+
+            Block anchor = toRemove[0];
+            foreach (var nb in newBlocks)
+                rtb.Document.Blocks.InsertBefore(anchor, nb);
+            foreach (var old in toRemove)
+                rtb.Document.Blocks.Remove(old);
+            if (newBlocks.Count > 0)
+            {
+                var pos = newBlocks[0].ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+                if (pos != null) rtb.CaretPosition = pos;
+            }
+        }
+
+        Block TopLevelBlock(Paragraph p)
+        {
+            if (p == null) return null;
+            DependencyObject cur = p;
+            while (cur != null)
+            {
+                var blk = cur as Block;
+                if (blk != null && blk.Parent == rtb.Document) return blk;
+                cur = LogicalTreeHelper.GetParent(cur);
+            }
+            return null;
+        }
+
+        void UndoLastAssist()
+        {
+            if (string.IsNullOrEmpty(undoXaml)) return;
+            string restore = undoXaml;
+            undoXaml = null;
+            loading = true;
+            try
+            {
+                var doc = XamlReader.Parse(restore) as FlowDocument;
+                if (doc != null)
+                {
+                    doc.PagePadding = new Thickness(2, 0, 2, 0);
+                    wired.Clear();
+                    rtb.Document = doc;
+                    WireTodos();
+                }
+            }
+            catch (Exception ex) { App.Log(ex); }
+            finally { loading = false; }
+            ScheduleSave();
+            HideAssistBar();
+            FocusEditor();
+        }
+
+        void ShowAssistBar(string text, string actionLabel, Action actionHandler, bool isError)
+        {
+            assistText.Text = text ?? "";
+            assistBar.Background = isError ? Theme.B("#FDECEB") : Theme.B("#FFF4D9");
+            assistBar.BorderBrush = isError ? Theme.B("#E2A49E") : Theme.B("#E4C98E");
+            assistActionBtn.Tag = actionHandler;
+            if (!string.IsNullOrEmpty(actionLabel) && actionHandler != null)
+            {
+                assistActionBtn.Content = actionLabel;
+                assistActionBtn.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                assistActionBtn.Visibility = Visibility.Collapsed;
+            }
+            assistBar.Visibility = Visibility.Visible;
+        }
+
+        void HideAssistBar()
+        {
+            assistBar.Visibility = Visibility.Collapsed;
+            assistActionBtn.Tag = null;
+        }
+
         void ToggleStrike()
         {
             var sel = rtb.Selection;
@@ -746,6 +1133,7 @@ namespace NotDefteri
             {
                 if (key == Key.X) { ToggleStrike(); ScheduleSave(); e.Handled = true; return; }
                 if (key == Key.K) { ToggleTodoSelection(); e.Handled = true; return; }
+                if (key == Key.D) { ApplyOfflineTransform(TextAssistant.SmartFormat, "✦ Metin akıllıca düzenlendi."); e.Handled = true; return; }
             }
             if (mods == ModifierKeys.None && key == Key.Enter) { HandleEnter(e); return; }
             if (mods == ModifierKeys.None && key == Key.Back) { HandleBackspace(e); return; }
