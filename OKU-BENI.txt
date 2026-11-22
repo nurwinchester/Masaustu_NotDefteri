@@ -1,0 +1,35 @@
+﻿MASAÜSTÜ NOT DEFTERİ
+====================
+
+KURULUM (bir kez)
+1. "Olustur.bat" dosyasına çift tıkla. Programı senin bilgisayarında derler
+   (NotDefteri.exe oluşur) ve başlatır. İnternet ya da kurulum gerekmez.
+2. Hata çıkarsa klasörde "derleme-sonucu.txt" oluşur. O dosyayı Claude'a gönder.
+3. Ekranın kenarında ayraçlar belirince, görev çubuğundaki defter simgesine
+   sağ tıkla ve "Görev çubuğuna sabitle"yi seç.
+
+KULLANIM
+- Ayraca tıkla: sayfası yanında açılır. Tekrar tıkla ya da Esc: kapanır.
+- Ayraca sağ tıkla: ad, ayraç rengi, sayfa rengi, masaüstünden kaldır.
+- Üstteki ⋮⋮ tutamacı: sürükleyip başka kenara/monitöre taşı. Sağ tık: menü.
+- Tutamacın altındaki iğne: bas, ayraçlar diğer uygulamaların üstünde kalsın.
+  Tekrar bas, yine arkada kalsınlar. (Menülerde ve Kütüphane'de de var.)
+- Görev çubuğu simgesi: tıkla, ayraçlar öne gelsin. Tekrar tıkla, geri çekilsin.
+  Başka bir pencereye tıklayınca da kendiliğinden arkaya döner.
+- Sayfanın iç kenarından ya da alt köşesinden tutup boyutunu ayarla. Boyut hatırlanır.
+- Sayfa sekmeleri: + ile ekle, çift tıklayarak adlandır, sağ tıkla taşı/sil.
+- Kütüphane (tutamaca ya da saatin yanındaki simgeye sağ tık): tüm ayraçlar,
+  arama, masaüstünde göster/gizle, silme.
+
+KISAYOLLAR
+Ctrl+B / I / U        kalın / italik / altı çizili
+Ctrl+Shift+X          üstü çizili
+Ctrl+1 / Ctrl+2       başlık 1 / başlık 2   (Ctrl+0 normal metin)
+Ctrl+Shift+L / N      madde işareti / numaralı liste
+Ctrl+Shift+K          to-do kutusu        (Ctrl+Enter işaretle)
+Ctrl+T                yeni sayfa sekmesi   (Ctrl+Tab sonraki sekme)
+Satır başında:  "[] " to-do   "- " madde   "1. " numara   "# " başlık   "## " alt başlık
+
+NOTLAR NEREDE?
+%AppData%\MasaustuNotDefteri\notlar.json
+Her gün otomatik yedek: %AppData%\MasaustuNotDefteri\yedekler\ (son 30 gün)
