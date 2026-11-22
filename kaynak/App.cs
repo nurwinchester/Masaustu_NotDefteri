@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -147,8 +147,80 @@ namespace NotDefteri
         void Replace()
         {
             if (Strip == null) return;
+            Strip.Rebuild();
             Strip.Place();
-            if (Panel != null && Panel.IsVisible) Panel.PlaceNear(Strip);
+            if (Panel != null && Panel.IsVisible) Panel.ApplySideAndPlace(Strip);
+        }
+
+        public WF.Screen[] OrderedScreens()
+        {
+            return WF.Screen.AllScreens.OrderBy(s => s.Bounds.Left).ThenBy(s => s.Bounds.Top).ToArray();
+        }
+
+        public WF.Screen CurrentScreen()
+        {
+            return DockScreen();
+        }
+
+        public string NextScreenLabel()
+        {
+            var screens = OrderedScreens();
+            if (screens.Length < 2) return "";
+            var cur = DockScreen();
+            int idx = Array.FindIndex(screens, s => s.DeviceName == cur.DeviceName);
+            int next = (idx + 1) % screens.Length;
+            return "Ekran " + (next + 1) + (screens[next].Primary ? " (Ana)" : "");
+        }
+
+        public void MoveToNextScreen()
+        {
+            var screens = OrderedScreens();
+            if (screens.Length < 2) return;
+            var cur = DockScreen();
+            int idx = Array.FindIndex(screens, s => s.DeviceName == cur.DeviceName);
+            var target = screens[(idx + 1) % screens.Length];
+            MoveToScreen(target.DeviceName, Dock.Side);
+        }
+
+        public void MoveToScreen(string deviceName, string side)
+        {
+            if (Strip == null) return;
+            Dock.Screen = deviceName;
+            if (!string.IsNullOrEmpty(side)) Dock.Side = side;
+            Strip.Rebuild();
+            Strip.Place();
+            if (Panel != null && Panel.IsVisible) Panel.ApplySideAndPlace(Strip);
+            Store.MarkDirty();
+        }
+
+        public void HidePanelForDrag()
+        {
+            if (Panel != null && Panel.IsVisible)
+            {
+                Panel.SaveNow();
+                Panel.Hide();
+            }
+        }
+
+        public void SnapToPoint(int px, int py, double desiredTopDip, bool keepPanelOpen)
+        {
+            double k = Scale;
+            var scr = WF.Screen.FromPoint(new SD.Point(px, py));
+            var wa = scr.WorkingArea;
+            double waL = wa.Left / k, waR = wa.Right / k, waT = wa.Top / k, waB = wa.Bottom / k;
+            Dock.Screen = scr.DeviceName;
+            Dock.Side = (px / k) < (waL + waR) / 2 ? "Left" : "Right";
+            double stripH = Strip != null && Strip.ActualHeight > 0 ? Strip.ActualHeight : 400;
+            double top = Math.Max(waT, Math.Min(desiredTopDip, waB - stripH));
+            Dock.Top = top - waT;
+            if (Strip != null)
+            {
+                Strip.Rebuild();
+                Strip.Place();
+            }
+            if (keepPanelOpen && Panel != null && Panel.IsVisible && Strip != null)
+                Panel.ApplySideAndPlace(Strip);
+            Store.MarkDirty();
         }
 
         public double Scale
@@ -432,6 +504,12 @@ namespace NotDefteri
             lib.Click += (s, e) => ShowLibrary(null);
             m.Items.Add(lib);
             m.Items.Add(new Separator());
+            var nextScr = new MenuItem { Header = "Diğer ekrana taşı" };
+            nextScr.Click += (s, e) => MoveToNextScreen();
+            m.Items.Add(nextScr);
+            var posMenu = new MenuItem { Header = "Ekran ve kenar" };
+            m.Items.Add(posMenu);
+            m.Items.Add(new Separator());
             var top = new MenuItem { Header = "Hep üstte tut" };
             top.Click += (s, e) => SetAlwaysOnTop(!AlwaysOnTop);
             m.Items.Add(top);
@@ -447,6 +525,24 @@ namespace NotDefteri
                 nd.IsEnabled = Store.OnDesktopCount() < Store.MaxOnDesktop;
                 auto.IsChecked = Store.Data.Settings.AutoStart;
                 top.IsChecked = AlwaysOnTop;
+                var screens = OrderedScreens();
+                nextScr.Visibility = screens.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
+                if (screens.Length > 1) nextScr.Header = "Diğer ekrana taşı (" + NextScreenLabel() + ")";
+                posMenu.Items.Clear();
+                var cur = CurrentScreen();
+                for (int i = 0; i < screens.Length; i++)
+                {
+                    var scr = screens[i];
+                    string dev = scr.DeviceName;
+                    string label = "Ekran " + (i + 1) + (scr.Primary ? " (Ana)" : "");
+                    bool same = cur != null && cur.DeviceName == dev;
+                    var leftItem = new MenuItem { Header = label + " — Sol kenar", IsChecked = same && !IsRightSide };
+                    leftItem.Click += (s2, e2) => MoveToScreen(dev, "Left");
+                    posMenu.Items.Add(leftItem);
+                    var rightItem = new MenuItem { Header = label + " — Sağ kenar", IsChecked = same && IsRightSide };
+                    rightItem.Click += (s2, e2) => MoveToScreen(dev, "Right");
+                    posMenu.Items.Add(rightItem);
+                }
             };
             return m;
         }
@@ -481,6 +577,9 @@ namespace NotDefteri
             var menu = new WF.ContextMenuStrip();
             menu.Items.Add("Ayraçları öne getir", null, (s, e) => BringFront());
             menu.Items.Add("Kütüphane", null, (s, e) => ShowLibrary(null));
+            var nextScrTray = new WF.ToolStripMenuItem("Diğer ekrana taşı");
+            nextScrTray.Click += (s, e) => MoveToNextScreen();
+            menu.Items.Add(nextScrTray);
             var topItem = new WF.ToolStripMenuItem("Hep üstte tut");
             topItem.Click += (s, e) => SetAlwaysOnTop(!AlwaysOnTop);
             menu.Items.Add(topItem);
@@ -489,7 +588,14 @@ namespace NotDefteri
             menu.Items.Add(auto);
             menu.Items.Add(new WF.ToolStripSeparator());
             menu.Items.Add("Çıkış", null, (s, e) => Exit());
-            menu.Opening += (s, e) => { auto.Checked = Store.Data.Settings.AutoStart; topItem.Checked = AlwaysOnTop; };
+            menu.Opening += (s, e) =>
+            {
+                auto.Checked = Store.Data.Settings.AutoStart;
+                topItem.Checked = AlwaysOnTop;
+                bool multi = WF.Screen.AllScreens.Length > 1;
+                nextScrTray.Visible = multi;
+                if (multi) nextScrTray.Text = "Diğer ekrana taşı (" + NextScreenLabel() + ")";
+            };
             tray.ContextMenuStrip = menu;
             tray.MouseClick += (s, e) => { if (e.Button == WF.MouseButtons.Left) BringFront(); };
             tray.DoubleClick += (s, e) => ShowLibrary(null);
